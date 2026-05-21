@@ -275,6 +275,61 @@ def build_html(
     # Serialise palette for JS
     palette_json = json.dumps(color_palette)
 
+    # ── Per-sender stats (for stats panel) ───────────────────────────────────
+    sender_msg_counts: dict[str, int] = {}
+    sender_media_counts: dict[str, int] = {}
+    for msg in messages:
+        if msg["type"] != "message" or not msg["sender"]:
+            continue
+        s = msg["sender"]
+        sender_msg_counts[s] = sender_msg_counts.get(s, 0) + 1
+        if msg.get("media"):
+            sender_media_counts[s] = sender_media_counts.get(s, 0) + 1
+
+    # Sort senders by message count descending
+    sorted_senders = sorted(sender_msg_counts, key=lambda s: sender_msg_counts[s], reverse=True)
+
+    # Build stats rows HTML
+    stats_rows_parts: list[str] = []
+    for s in sorted_senders:
+        c = color_palette.get(s, "#555")
+        inits_s = html.escape(initials(s))
+        s_esc = html.escape(s)
+        msgs_n = sender_msg_counts[s]
+        media_n = sender_media_counts.get(s, 0)
+        total = sender_msg_counts[s]  # for bar width relative to max
+        stats_rows_parts.append(
+            f'<div class="stat-row" data-sender="{s_esc}">'
+            f'<div class="stat-avatar" style="background:{c}">{inits_s}</div>'
+            f'<div class="stat-info">'
+            f'<div class="stat-name">{s_esc}</div>'
+            f'<div class="stat-bar-wrap">'
+            f'<div class="stat-bar" style="background:{c}" data-count="{total}"></div>'
+            f'</div>'
+            f'</div>'
+            f'<div class="stat-nums">'
+            f'<span class="stat-msg-count">{msgs_n}</span>'
+            f'<span class="stat-media-count">{media_n} media</span>'
+            f'</div>'
+            f'</div>'
+        )
+    stats_rows_html = "\n".join(stats_rows_parts)
+
+    # Build sender filter <option> elements
+    sender_options = '<option value="">All senders</option>\n'
+    for s in sorted_senders:
+        s_esc = html.escape(s)
+        sender_options += f'<option value="{s_esc}">{s_esc}</option>\n'
+
+    # ── Collect all ISO dates present (for date picker min/max) ──────────────
+    all_dates = sorted({
+        msg["date"].strftime("%Y-%m-%d")
+        for msg in messages
+        if msg.get("date")
+    })
+    date_min = all_dates[0] if all_dates else ""
+    date_max = all_dates[-1] if all_dates else ""
+
     # ── Bubble rows ──────────────────────────────────────────────────────────
     rows_html_parts: list[str] = []
     prev_date: str | None = None
@@ -283,12 +338,14 @@ def build_html(
     for msg in messages:
         dt: datetime | None = msg.get("date")
         date_label = dt.strftime("%-d %B %Y") if dt else ""
-        time_label = dt.strftime("%H:%M") if dt else ""
+        date_iso   = dt.strftime("%Y-%m-%d")  if dt else ""
+        time_label = dt.strftime("%H:%M")     if dt else ""
 
-        # Date separator
+        # Date separator — carries data-date for jump-to-date
         if date_label and date_label != prev_date:
             rows_html_parts.append(
-                f'<div class="date-sep"><span>{html.escape(date_label)}</span></div>'
+                f'<div class="date-sep" data-date="{date_iso}">'
+                f'<span>{html.escape(date_label)}</span></div>'
             )
             prev_date = date_label
             prev_sender = None
@@ -303,15 +360,14 @@ def build_html(
             continue
 
         # Regular message
-        sender   = msg["sender"]
-        color    = color_palette.get(sender, "#555")
-        inits    = initials(sender)
-        text_h   = text_to_html(msg["text"])
-        media_h  = ""
+        sender  = msg["sender"]
+        color   = color_palette.get(sender, "#555")
+        inits   = initials(sender)
+        text_h  = text_to_html(msg["text"])
+        media_h = ""
         if msg.get("media") and msg["media"] in available_media:
             media_h = media_html(msg["media"], media_dir_rel)
 
-        # Show sender name only when it changes (group-chat style)
         show_name = (sender != prev_sender)
         prev_sender = sender
 
@@ -348,6 +404,8 @@ def build_html(
 
     rows_html = "\n".join(rows_html_parts)
 
+    total_messages = sum(1 for m in messages if m["type"] == "message")
+
     return f"""<!DOCTYPE html>
 <html lang="he" dir="auto">
 <head>
@@ -355,191 +413,396 @@ def build_html(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(chat_name)}</title>
 <style>
+/* ── CSS variables (light mode defaults) ── */
+:root {{
+  --bg-app:      #ECE5DD;
+  --bg-header:   #128C7E;
+  --bg-toolbar:  #f0f0f0;
+  --bg-bubble:   #ffffff;
+  --bg-date-sep: #D9F7BE;
+  --bg-sys:      rgba(255,255,255,.75);
+  --bg-stats:    #ffffff;
+  --bg-input:    #ffffff;
+  --border:      #cccccc;
+  --text-main:   #111111;
+  --text-muted:  #555555;
+  --text-time:   #999999;
+  --text-header: #ffffff;
+  --shadow-bubble: rgba(0,0,0,.13);
+  --mark-bg:     #FFD700;
+  --scrollbar:   #bbbbbb;
+  --stat-bar-bg: #e0e0e0;
+}}
+body.dark {{
+  --bg-app:      #0d1418;
+  --bg-header:   #1f2c34;
+  --bg-toolbar:  #1f2c34;
+  --bg-bubble:   #202c33;
+  --bg-date-sep: #1d2b22;
+  --bg-sys:      rgba(32,44,51,.85);
+  --bg-stats:    #111b21;
+  --bg-input:    #2a3942;
+  --border:      #2a3942;
+  --text-main:   #e9edef;
+  --text-muted:  #8696a0;
+  --text-time:   #8696a0;
+  --text-header: #e9edef;
+  --shadow-bubble: rgba(0,0,0,.4);
+  --mark-bg:     #b8860b;
+  --scrollbar:   #2a3942;
+  --stat-bar-bg: #2a3942;
+}}
+
 /* ── Reset & Base ── */
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-html, body {{ height: 100%; font-family: -apple-system, BlinkMacSystemFont,
-    'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; }}
-body {{ display: flex; flex-direction: column;
-    background: #ECE5DD; color: #111; overflow: hidden; }}
+html, body {{
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  transition: background .2s, color .2s;
+}}
+body {{
+  display: flex; flex-direction: column;
+  background: var(--bg-app); color: var(--text-main); overflow: hidden;
+}}
 
 /* ── Header ── */
 #header {{
-    display: flex; align-items: center; gap: 12px;
-    background: #128C7E; color: #fff;
-    padding: 10px 16px; flex-shrink: 0; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg-header); color: var(--text-header);
+  padding: 10px 14px; flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
 }}
 #header .chat-avatar {{
-    width: 40px; height: 40px; border-radius: 50%;
-    background: #25D366; display: flex; align-items: center;
-    justify-content: center; font-weight: 700; font-size: 16px; color: #fff;
-    flex-shrink: 0;
+  width: 38px; height: 38px; border-radius: 50%;
+  background: #25D366; display: flex; align-items: center;
+  justify-content: center; font-weight: 700; font-size: 15px; color: #fff;
+  flex-shrink: 0;
 }}
-#header h1 {{ font-size: 16px; font-weight: 600; flex: 1; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; }}
-#header .msg-count {{ font-size: 12px; opacity: .8; }}
+#header h1 {{
+  font-size: 15px; font-weight: 600; flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}}
+#header .header-actions {{ display: flex; align-items: center; gap: 6px; flex-shrink: 0; }}
+#msg-count {{ font-size: 12px; opacity: .8; }}
 
-/* ── Search bar ── */
-#search-bar {{
-    display: flex; align-items: center; gap: 8px;
-    background: #f0f0f0; padding: 6px 12px; flex-shrink: 0;
-    border-bottom: 1px solid #ccc;
+/* ── Icon buttons (header) ── */
+.icon-btn {{
+  background: none; border: none; cursor: pointer;
+  color: var(--text-header); font-size: 18px; padding: 4px 6px;
+  border-radius: 6px; line-height: 1; opacity: .85;
+  transition: opacity .15s, background .15s;
 }}
-#search-bar input {{
-    flex: 1; border: 1px solid #ccc; border-radius: 20px;
-    padding: 6px 14px; font-size: 13px; outline: none;
-    background: #fff;
+.icon-btn:hover {{ opacity: 1; background: rgba(255,255,255,.15); }}
+
+/* ── Toolbar (search + filters) ── */
+#toolbar {{
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--bg-toolbar); padding: 6px 12px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
 }}
-#search-bar input:focus {{ border-color: #128C7E; }}
-#search-bar .match-count {{ font-size: 12px; color: #555; min-width: 80px; text-align: right; }}
+#search-input {{
+  flex: 1; min-width: 140px; border: 1px solid var(--border);
+  border-radius: 20px; padding: 6px 14px; font-size: 13px; outline: none;
+  background: var(--bg-input); color: var(--text-main);
+}}
+#search-input:focus {{ border-color: #128C7E; }}
+#match-count {{ font-size: 12px; color: var(--text-muted); min-width: 70px; }}
+
+/* ── Sender filter & date picker ── */
+.toolbar-select, .toolbar-date {{
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 10px; font-size: 13px; outline: none;
+  background: var(--bg-input); color: var(--text-main); cursor: pointer;
+}}
+.toolbar-select:focus, .toolbar-date:focus {{ border-color: #128C7E; }}
+#jump-btn {{
+  padding: 5px 12px; border-radius: 8px; border: none;
+  background: #128C7E; color: #fff; font-size: 13px;
+  cursor: pointer; font-weight: 600;
+}}
+#jump-btn:hover {{ background: #0e7065; }}
 
 /* ── Chat window ── */
 #chat {{
-    flex: 1; overflow-y: auto; padding: 12px 16px;
-    display: flex; flex-direction: column; gap: 2px;
+  flex: 1; overflow-y: auto; padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 2px;
 }}
 
 /* ── Date separator ── */
 .date-sep {{
-    display: flex; align-items: center; justify-content: center;
-    margin: 10px 0;
+  display: flex; align-items: center; justify-content: center;
+  margin: 10px 0;
 }}
 .date-sep span {{
-    background: #D9F7BE; color: #555; font-size: 12px;
-    padding: 3px 10px; border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.15);
+  background: var(--bg-date-sep); color: var(--text-muted); font-size: 12px;
+  padding: 3px 10px; border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.15);
 }}
 
 /* ── System message ── */
 .sys-msg {{
-    text-align: center; font-size: 12px; color: #555;
-    background: rgba(255,255,255,.7); border-radius: 8px;
-    padding: 3px 10px; margin: 4px auto;
-    max-width: 80%;
+  text-align: center; font-size: 12px; color: var(--text-muted);
+  background: var(--bg-sys); border-radius: 8px;
+  padding: 3px 10px; margin: 4px auto; max-width: 80%;
 }}
 
 /* ── Message row ── */
 .msg-row {{
-    display: flex; align-items: flex-end; gap: 6px;
-    max-width: 75%; align-self: flex-start;
-    margin-bottom: 2px;
+  display: flex; align-items: flex-end; gap: 6px;
+  max-width: 75%; align-self: flex-start; margin-bottom: 2px;
 }}
-.msg-row.hidden {{ display: none; }}
+.msg-row.hidden {{ display: none !important; }}
 
 /* ── Avatar ── */
 .avatar {{
-    width: 32px; height: 32px; border-radius: 50%;
-    flex-shrink: 0; display: flex; align-items: center;
-    justify-content: center; font-size: 12px; font-weight: 700;
-    color: #fff;
+  width: 32px; height: 32px; border-radius: 50%;
+  flex-shrink: 0; display: flex; align-items: center;
+  justify-content: center; font-size: 12px; font-weight: 700; color: #fff;
 }}
 
 /* ── Bubble ── */
 .bubble {{
-    background: #fff; border-radius: 8px 8px 8px 0;
-    padding: 6px 8px 4px; box-shadow: 0 1px 1px rgba(0,0,0,.13);
-    max-width: 100%; min-width: 80px;
-    position: relative; word-break: break-word;
+  background: var(--bg-bubble); border-radius: 8px 8px 8px 0;
+  padding: 6px 8px 4px; box-shadow: 0 1px 1px var(--shadow-bubble);
+  max-width: 100%; min-width: 80px;
+  position: relative; word-break: break-word;
 }}
 
 /* ── Sender name inside bubble ── */
-.sender-name {{
-    font-size: 12px; font-weight: 700; margin-bottom: 2px;
-}}
+.sender-name {{ font-size: 12px; font-weight: 700; margin-bottom: 2px; }}
 
 /* ── Message text ── */
 .msg-text {{ font-size: 14px; line-height: 1.45; white-space: pre-wrap; }}
 
 /* ── Timestamp ── */
 .msg-time {{
-    font-size: 11px; color: #999; text-align: right;
-    margin-top: 2px;
+  font-size: 11px; color: var(--text-time); text-align: right; margin-top: 2px;
 }}
 
 /* ── Media ── */
 .media-wrap {{ margin-bottom: 4px; }}
 .media-img {{
-    max-width: 280px; max-height: 280px; border-radius: 6px;
-    display: block; cursor: pointer; object-fit: contain;
+  max-width: 280px; max-height: 280px; border-radius: 6px;
+  display: block; cursor: pointer; object-fit: contain;
 }}
-.media-video {{
-    max-width: 280px; border-radius: 6px; display: block;
-}}
-.media-audio {{
-    max-width: 260px; display: block;
-}}
+.media-video {{ max-width: 280px; border-radius: 6px; display: block; }}
+.media-audio {{ max-width: 260px; display: block; }}
 .media-doc {{
-    display: inline-flex; align-items: center; gap: 6px;
-    background: #f5f5f5; border-radius: 8px;
-    padding: 8px 12px; text-decoration: none; color: #333;
-    font-size: 13px; border: 1px solid #ddd;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-toolbar); border-radius: 8px;
+  padding: 8px 12px; text-decoration: none; color: var(--text-main);
+  font-size: 13px; border: 1px solid var(--border);
 }}
-.media-doc:hover {{ background: #e8e8e8; }}
+.media-doc:hover {{ opacity: .8; }}
 
-/* ── Highlighted search match ── */
-mark {{ background: #FFD700; border-radius: 2px; padding: 0 1px; }}
+/* ── Search highlight ── */
+mark {{ background: var(--mark-bg); border-radius: 2px; padding: 0 1px; }}
 
 /* ── Scrollbar ── */
 #chat::-webkit-scrollbar {{ width: 6px; }}
-#chat::-webkit-scrollbar-thumb {{ background: #bbb; border-radius: 3px; }}
+#chat::-webkit-scrollbar-thumb {{ background: var(--scrollbar); border-radius: 3px; }}
+
+/* ═══════════════════════════════════════════════════════
+   Stats panel (slide-in from right)
+   ═══════════════════════════════════════════════════════ */
+#stats-overlay {{
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  z-index: 100; display: none; align-items: flex-start; justify-content: flex-end;
+}}
+#stats-overlay.open {{ display: flex; }}
+#stats-panel {{
+  background: var(--bg-stats); width: 320px; max-width: 90vw;
+  height: 100%; overflow-y: auto; padding: 0;
+  box-shadow: -4px 0 16px rgba(0,0,0,.3);
+  display: flex; flex-direction: column;
+}}
+#stats-header {{
+  background: var(--bg-header); color: var(--text-header);
+  padding: 14px 16px; display: flex; align-items: center; gap: 10px;
+  font-size: 15px; font-weight: 600; flex-shrink: 0;
+}}
+#stats-header button {{
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  color: var(--text-header); font-size: 20px; line-height: 1; opacity: .8;
+}}
+#stats-header button:hover {{ opacity: 1; }}
+#stats-summary {{
+  padding: 10px 16px; font-size: 13px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}}
+#stats-list {{ padding: 8px 0; flex: 1; }}
+
+.stat-row {{
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; cursor: pointer;
+  transition: background .1s;
+}}
+.stat-row:hover {{ background: rgba(128,128,128,.08); }}
+.stat-row.active {{ background: rgba(18,140,126,.12); }}
+.stat-avatar {{
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: #fff;
+}}
+.stat-info {{ flex: 1; min-width: 0; }}
+.stat-name {{
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; color: var(--text-main);
+}}
+.stat-bar-wrap {{
+  height: 4px; background: var(--stat-bar-bg); border-radius: 2px;
+  margin-top: 4px; overflow: hidden;
+}}
+.stat-bar {{ height: 100%; border-radius: 2px; width: 0; /* set by JS */ }}
+.stat-nums {{ text-align: right; flex-shrink: 0; }}
+.stat-msg-count {{
+  display: block; font-size: 14px; font-weight: 700; color: var(--text-main);
+}}
+.stat-media-count {{
+  display: block; font-size: 11px; color: var(--text-muted);
+}}
 </style>
 </head>
 <body>
 
+<!-- ═══ Header ═══ -->
 <div id="header">
   <div class="chat-avatar">{html.escape(initials(chat_name))}</div>
   <h1>{html.escape(chat_name)}</h1>
-  <div class="msg-count" id="msg-count"></div>
+  <div class="header-actions">
+    <span id="msg-count"></span>
+    <button class="icon-btn" id="stats-btn" title="Sender stats">&#x1F4CA;</button>
+    <button class="icon-btn" id="dark-btn"  title="Toggle dark mode">&#x1F319;</button>
+  </div>
 </div>
 
-<div id="search-bar">
-  <input type="search" id="search-input" placeholder="Search messages…" autocomplete="off">
-  <div class="match-count" id="match-count"></div>
+<!-- ═══ Toolbar ═══ -->
+<div id="toolbar">
+  <input type="search" id="search-input" placeholder="Search messages… ( / )" autocomplete="off">
+  <span id="match-count"></span>
+  <select class="toolbar-select" id="sender-filter">
+    {sender_options}
+  </select>
+  <input type="date" class="toolbar-date" id="date-picker"
+         min="{date_min}" max="{date_max}" title="Jump to date">
+  <button id="jump-btn">Go</button>
 </div>
 
+<!-- ═══ Chat ═══ -->
 <div id="chat">
 {rows_html}
 </div>
 
+<!-- ═══ Stats overlay ═══ -->
+<div id="stats-overlay">
+  <div id="stats-panel">
+    <div id="stats-header">
+      &#x1F4CA; Sender Stats
+      <button id="stats-close" title="Close">&times;</button>
+    </div>
+    <div id="stats-summary"></div>
+    <div id="stats-list">
+{stats_rows_html}
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {{
-  const palette = {palette_json};
-  const rows    = Array.from(document.querySelectorAll('.msg-row'));
-  const sysRows = Array.from(document.querySelectorAll('.sys-msg'));
-  const input   = document.getElementById('search-input');
-  const countEl = document.getElementById('match-count');
-  const msgCountEl = document.getElementById('msg-count');
+  /* ── Data ─────────────────────────────────────────────────────────────── */
+  const palette    = {palette_json};
+  const totalMsgs  = {total_messages};
+  const rows       = Array.from(document.querySelectorAll('.msg-row'));
+  const dateSeps   = Array.from(document.querySelectorAll('.date-sep'));
 
-  msgCountEl.textContent = rows.length + ' messages';
+  /* ── Elements ─────────────────────────────────────────────────────────── */
+  const chat        = document.getElementById('chat');
+  const searchInput = document.getElementById('search-input');
+  const matchCount  = document.getElementById('match-count');
+  const msgCountEl  = document.getElementById('msg-count');
+  const senderSel   = document.getElementById('sender-filter');
+  const datePicker  = document.getElementById('date-picker');
+  const jumpBtn     = document.getElementById('jump-btn');
+  const darkBtn     = document.getElementById('dark-btn');
+  const statsBtn    = document.getElementById('stats-btn');
+  const statsOverlay= document.getElementById('stats-overlay');
+  const statsClose  = document.getElementById('stats-close');
+  const statsSummary= document.getElementById('stats-summary');
 
-  // Scroll to bottom on load
-  const chat = document.getElementById('chat');
+  msgCountEl.textContent = totalMsgs + ' messages';
+
+  /* ── Scroll to bottom on load ─────────────────────────────────────────── */
   chat.scrollTop = chat.scrollHeight;
 
+  /* ════════════════════════════════════════════════════════════════════════
+     DARK MODE
+     ════════════════════════════════════════════════════════════════════════ */
+  function applyDark(on) {{
+    document.body.classList.toggle('dark', on);
+    darkBtn.textContent = on ? '☀️' : '🌙';
+    try {{ localStorage.setItem('wa-dark', on ? '1' : '0'); }} catch(_) {{}}
+  }}
+  // Restore saved preference, fall back to system preference
+  (function () {{
+    let saved;
+    try {{ saved = localStorage.getItem('wa-dark'); }} catch(_) {{}}
+    if (saved !== null) {{
+      applyDark(saved === '1');
+    }} else {{
+      applyDark(window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }}
+  }})();
+  darkBtn.addEventListener('click', () => applyDark(!document.body.classList.contains('dark')));
+
+  /* ════════════════════════════════════════════════════════════════════════
+     STATS PANEL
+     ════════════════════════════════════════════════════════════════════════ */
+  // Scale stat bars relative to max count
+  (function () {{
+    const bars = Array.from(document.querySelectorAll('.stat-bar'));
+    if (!bars.length) return;
+    const maxCount = Math.max(...bars.map(b => parseInt(b.dataset.count || '0', 10)));
+    bars.forEach(b => {{
+      const pct = maxCount > 0 ? (parseInt(b.dataset.count, 10) / maxCount * 100) : 0;
+      b.style.width = pct + '%';
+    }});
+  }})();
+
+  statsSummary.textContent =
+    totalMsgs + ' messages · ' + Object.keys(palette).length + ' participants';
+
+  statsBtn.addEventListener('click', () => statsOverlay.classList.add('open'));
+  statsClose.addEventListener('click', () => {{
+    statsOverlay.classList.remove('open');
+    // clear active sender filter set by clicking a stat row
+  }});
+  statsOverlay.addEventListener('click', e => {{
+    if (e.target === statsOverlay) statsOverlay.classList.remove('open');
+  }});
+
+  // Clicking a stat row filters by that sender
+  document.querySelectorAll('.stat-row').forEach(row => {{
+    row.addEventListener('click', () => {{
+      const sender = row.dataset.sender;
+      senderSel.value = sender;
+      statsOverlay.classList.remove('open');
+      applyFilters();
+    }});
+  }});
+
+  /* ════════════════════════════════════════════════════════════════════════
+     SEARCH + SENDER FILTER  (combined)
+     ════════════════════════════════════════════════════════════════════════ */
   function escapeRegex(s) {{
     return s.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
   }}
 
-  function highlightNode(node, re) {{
-    if (node.nodeType === Node.TEXT_NODE) {{
-      const text = node.textContent;
-      const m = re.exec(text);
-      if (!m) return null;
-      const frag = document.createDocumentFragment();
-      frag.appendChild(document.createTextNode(text.slice(0, m.index)));
-      const mark = document.createElement('mark');
-      mark.textContent = m[0];
-      frag.appendChild(mark);
-      frag.appendChild(document.createTextNode(text.slice(m.index + m[0].length)));
-      return frag;
-    }}
-    return null;
-  }}
-
   function clearHighlights(el) {{
     el.querySelectorAll('mark').forEach(m => {{
-      const parent = m.parentNode;
-      parent.replaceChild(document.createTextNode(m.textContent), m);
-      parent.normalize();
+      m.parentNode.replaceChild(document.createTextNode(m.textContent), m);
+      m.parentNode && m.parentNode.normalize();
     }});
   }}
 
@@ -548,60 +811,101 @@ mark {{ background: #FFD700; border-radius: 2px; padding: 0 1px; }}
     const replacements = [];
     let node;
     while ((node = walker.nextNode())) {{
-      const frag = highlightNode(node, re);
-      if (frag) replacements.push([node, frag]);
+      if (node.nodeType !== Node.TEXT_NODE) continue;
+      const text = node.textContent;
+      const m = re.exec(text);
+      if (!m) continue;
+      const frag = document.createDocumentFragment();
+      frag.appendChild(document.createTextNode(text.slice(0, m.index)));
+      const mark = document.createElement('mark');
+      mark.textContent = m[0];
+      frag.appendChild(mark);
+      frag.appendChild(document.createTextNode(text.slice(m.index + m[0].length)));
+      replacements.push([node, frag]);
     }}
     for (const [node, frag] of replacements) {{
-      node.parentNode.replaceChild(frag, node);
+      node.parentNode && node.parentNode.replaceChild(frag, node);
     }}
   }}
 
-  let lastQuery = '';
+  function applyFilters() {{
+    const q      = searchInput.value.trim().toLowerCase();
+    const sender = senderSel.value;
 
-  input.addEventListener('input', function () {{
-    const q = this.value.trim().toLowerCase();
-    if (q === lastQuery) return;
-    lastQuery = q;
+    rows.forEach(r => clearHighlights(r));
 
-    // Clear all highlights first
-    rows.forEach(r => {{ clearHighlights(r); r.classList.remove('hidden'); }});
-    sysRows.forEach(r => {{ clearHighlights(r); r.classList.remove('hidden'); }});
-    document.querySelectorAll('.date-sep').forEach(d => d.classList.remove('hidden'));
-
-    if (!q) {{
-      countEl.textContent = '';
-      msgCountEl.textContent = rows.length + ' messages';
-      return;
-    }}
-
-    const re = new RegExp(escapeRegex(q), 'gi');
+    const re = q ? new RegExp(escapeRegex(q), 'gi') : null;
     let matched = 0;
 
     rows.forEach(r => {{
-      const searchable = (r.dataset.searchable || '').toLowerCase();
-      const senderText = (r.dataset.sender || '').toLowerCase();
-      if (searchable.includes(q) || senderText.includes(q)) {{
+      const matchesSender = !sender || r.dataset.sender === sender;
+      const searchable    = (r.dataset.searchable || '') + ' ' + (r.dataset.sender || '');
+      const matchesSearch = !q || searchable.toLowerCase().includes(q);
+
+      if (matchesSender && matchesSearch) {{
+        r.classList.remove('hidden');
         matched++;
-        applyHighlights(r, re);
+        if (re) applyHighlights(r, re);
       }} else {{
         r.classList.add('hidden');
       }}
     }});
 
-    countEl.textContent = matched === 0 ? 'No results' : matched + ' results';
-    msgCountEl.textContent = matched + ' / ' + rows.length + ' messages';
+    // Update counts
+    if (q || sender) {{
+      matchCount.textContent = matched + ' result' + (matched !== 1 ? 's' : '');
+      msgCountEl.textContent = matched + ' / ' + totalMsgs + ' messages';
+    }} else {{
+      matchCount.textContent = '';
+      msgCountEl.textContent = totalMsgs + ' messages';
+    }}
+
+    // Highlight active stat row
+    document.querySelectorAll('.stat-row').forEach(r => {{
+      r.classList.toggle('active', r.dataset.sender === sender && sender !== '');
+    }});
+  }}
+
+  searchInput.addEventListener('input', applyFilters);
+  senderSel.addEventListener('change', applyFilters);
+
+  /* ════════════════════════════════════════════════════════════════════════
+     JUMP TO DATE
+     ════════════════════════════════════════════════════════════════════════ */
+  function jumpToDate(isoDate) {{
+    if (!isoDate) return;
+    // Find the closest date separator on or after the chosen date
+    let target = null;
+    for (const sep of dateSeps) {{
+      if (sep.dataset.date >= isoDate) {{ target = sep; break; }}
+    }}
+    if (!target && dateSeps.length) target = dateSeps[dateSeps.length - 1];
+    if (target) target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+  }}
+
+  jumpBtn.addEventListener('click', () => jumpToDate(datePicker.value));
+  datePicker.addEventListener('keydown', e => {{
+    if (e.key === 'Enter') jumpToDate(datePicker.value);
   }});
 
-  // Keyboard shortcut: / to focus search
-  document.addEventListener('keydown', function (e) {{
-    if (e.key === '/' && document.activeElement !== input) {{
+  /* ════════════════════════════════════════════════════════════════════════
+     KEYBOARD SHORTCUTS
+     ════════════════════════════════════════════════════════════════════════ */
+  document.addEventListener('keydown', e => {{
+    if (e.key === '/' && document.activeElement !== searchInput
+                      && document.activeElement !== datePicker) {{
       e.preventDefault();
-      input.focus();
+      searchInput.focus();
     }}
     if (e.key === 'Escape') {{
-      input.value = '';
-      input.dispatchEvent(new Event('input'));
-      input.blur();
+      if (statsOverlay.classList.contains('open')) {{
+        statsOverlay.classList.remove('open');
+      }} else {{
+        searchInput.value = '';
+        senderSel.value   = '';
+        applyFilters();
+        searchInput.blur();
+      }}
     }}
   }});
 }})();
