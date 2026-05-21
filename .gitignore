@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WhatsApp export data — keep zips out of the repo;
+# extracted folders and generated HTML are also personal data.
+example/*.zip
+example/*.html
+example/WhatsApp*/
+
+# Any extracted chat folder sitting next to a zip
+**/WhatsApp Chat*/
+**/_chat.txt
