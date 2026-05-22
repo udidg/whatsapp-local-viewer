@@ -45,9 +45,21 @@ Convert a WhatsApp exported `.zip` file into a self-contained, browsable HTML fi
 
 ### 2. Run the script
 
+**If you already have the script downloaded:**
+
 ```bash
 python3 whatsapp_viewer.py "WhatsApp Chat - My Group.zip"
 ```
+
+**One-liner — no prior download needed:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/udidg/whatsapp-local-viewer/main/whatsapp_viewer.py -o /tmp/whatsapp_viewer.py && \
+curl -fsSL https://raw.githubusercontent.com/udidg/whatsapp-local-viewer/main/viewer.js -o /tmp/viewer.js && \
+python3 /tmp/whatsapp_viewer.py "WhatsApp Chat - My Group.zip"
+```
+
+This fetches both files to `/tmp` and runs immediately. The output is written next to your zip as always.
 
 The script and the zip can be in different folders — output is always written next to the zip:
 
