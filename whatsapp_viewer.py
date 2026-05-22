@@ -258,15 +258,9 @@ def text_to_html(text: str) -> str:
     return t
 
 
-def load_viewer_js() -> str:
-    """Read viewer.js from the same directory as this script."""
-    viewer_path = Path(__file__).parent / "viewer.js"
-    if not viewer_path.exists():
-        sys.exit(
-            f"Error: viewer.js not found at {viewer_path}\n"
-            "Make sure viewer.js is in the same folder as whatsapp_viewer.py."
-        )
-    return viewer_path.read_text(encoding="utf-8")
+VIEWER_JS_RAW_URL = (
+    "https://raw.githubusercontent.com/udidg/whatsapp-local-viewer/main/viewer.js"
+)
 
 
 def build_html(
@@ -278,8 +272,8 @@ def build_html(
     """
     Build a self-contained HTML file:
     - embeds all message data as a JSON blob
-    - inlines viewer.js directly (fully offline, no CDN needed)
-    - calls WA.init() on load
+    - fetches viewer.js from raw GitHub via fetch()+eval (auto-updates)
+    - calls WA.init() once ready
     """
 
     color_palette: dict[str, str] = {}
@@ -348,7 +342,6 @@ def build_html(
     rows_json      = json.dumps(rows_data, ensure_ascii=False)
     palette_json   = json.dumps(color_palette)
     total_messages = sum(1 for m in messages if m["type"] == "message")
-    viewer_js      = load_viewer_js()
 
     return (
         "<!DOCTYPE html>\n"
@@ -369,11 +362,21 @@ def build_html(
         f"  mediaBase: {json.dumps(media_dir_rel)},\n"
         "  getMediaUrl: null\n"
         "};\n"
+        f"fetch('{VIEWER_JS_RAW_URL}')\n"
+        "  .then(function(r) {{\n"
+        "    if (!r.ok) throw new Error('HTTP ' + r.status);\n"
+        "    return r.text();\n"
+        "  }})\n"
+        "  .then(function(code) {{\n"
+        "    (0, eval)(code);\n"
+        "    WA.init(window.__WA_CONFIG__);\n"
+        "  }})\n"
+        "  .catch(function(e) {{\n"
+        "    document.body.innerHTML = '<p style=\"padding:2rem;font-family:sans-serif;color:red\">'  \n"
+        "      + 'Failed to load viewer.js: ' + e.message\n"
+        "      + '<br>Check your internet connection and refresh.</p>';\n"
+        "  }});\n"
         "</script>\n"
-        "<script>\n"
-        + viewer_js +
-        "\n</script>\n"
-        "<script>WA.init(window.__WA_CONFIG__);</script>\n"
         "</body>\n"
         "</html>\n"
     )
