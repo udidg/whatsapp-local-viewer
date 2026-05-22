@@ -1,15 +1,6 @@
 # WhatsApp Local Viewer
 
-Browse any WhatsApp exported chat in your browser — with a WhatsApp-like UI, full media support, virtual scroll, dark mode, search, and more.
-
-Two ways to use it:
-
-| | `index.html` — Standalone | `whatsapp_viewer.py` — Python |
-|---|---|---|
-| Requires Python | No | Yes (3.10+) |
-| Requires internet | Yes (loads `viewer.js`) | Yes (loads `viewer.js`) |
-| Re-run on new backup | No — just open & pick zip | Yes — regenerate HTML |
-| Media access | Read directly from zip | Relative paths on disk |
+Convert a WhatsApp exported `.zip` file into a self-contained, browsable HTML file — with a WhatsApp-like UI, full media support, dark mode, search, and more.
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -20,11 +11,11 @@ Two ways to use it:
 ## Features
 
 - **WhatsApp-like UI** — colour-coded sender bubbles, avatar initials, timestamps, date separators
-- **All media types** — images, video with poster frame preview, audio player, documents, contacts
-- **Group & 1-on-1** chats — auto-detected, senders colour-coded
+- **All media types** — images inline, video with poster frame preview, audio player, documents and contacts as download links
+- **Group & 1-on-1 chats** — auto-detected, senders colour-coded
 - **Virtual scroll** — only ~80 rows in the DOM at once; handles chats of any size smoothly
 - **Dark mode** — toggle with `🌙`, preference saved in `localStorage`, respects system setting
-- **Live search** — keyword filter with match highlighting (press `/` to focus)
+- **Live search** — keyword filter with match highlighting (press `/` to focus, `Esc` to clear)
 - **Sender filter** — dropdown to show messages from one participant; combines with search
 - **Jump to date** — date picker scrolls to the nearest date in the chat
 - **Stats panel** — per-sender message and media counts with proportional bars
@@ -33,26 +24,18 @@ Two ways to use it:
 - **RTL support** — Hebrew, Arabic and other RTL text rendered correctly
 - **WhatsApp markdown** — `*bold*`, `_italic_`, `~strike~`, ` ```mono``` `
 - **Mobile-friendly** — safe-area insets, touch targets, collapsible filter toolbar
+- **100% self-contained** — the generated HTML embeds everything; no internet required to view it
 
 ---
 
-## Option 1 — Standalone `index.html` (no Python needed)
-
-1. Download `index.html` from this repo and put it anywhere
-2. Open it in Chrome or Firefox
-3. Drag your WhatsApp export `.zip` onto the page, or click to browse
-4. The chat renders directly in the browser — the zip is parsed entirely client-side
-
-> `index.html` fetches `viewer.js` from this repo on load so it always uses the latest version.
-
----
-
-## Option 2 — Python script
-
-### Requirements
+## Requirements
 
 - Python 3.10 or newer
 - No third-party packages
+
+---
+
+## Usage
 
 ### 1. Export your chat from WhatsApp
 
@@ -72,7 +55,7 @@ The script and the zip can be in different folders — output is always written 
 python3 ~/tools/whatsapp_viewer.py ~/Downloads/"WhatsApp Chat - Family.zip"
 ```
 
-> **Tip:** On macOS you can drag the zip into the terminal after typing the command to auto-fill its path.
+> **Tip:** On macOS, drag the zip file into the terminal after typing the command to auto-fill its path.
 
 ### 3. Open the HTML
 
@@ -87,9 +70,7 @@ python3 ~/tools/whatsapp_viewer.py ~/Downloads/"WhatsApp Chat - Family.zip"
     └── ...
 ```
 
-The HTML references media via **relative paths** — keep the extracted folder alongside the HTML file.
-
-Re-running is fast: already-extracted files are skipped.
+The HTML references media via **relative paths** — keep the extracted folder alongside the HTML. Re-running is fast: already-extracted files are skipped.
 
 ---
 
@@ -109,27 +90,13 @@ Re-running is fast: already-extracted files are skipped.
 | iOS | `[03/09/2023, 11:58:39] Alice: Hello!` |
 | Android | `03/09/2023, 11:58 - Alice: Hello!` |
 
----
-
-## How it works
-
-```
-viewer.js          — rendering engine (virtual scroll, UI, dark mode, search)
-index.html         — standalone loader: parses zip in-browser via fetch()+eval
-whatsapp_viewer.py — Python script: extracts zip, parses chat, emits HTML shell
-                     The HTML shell fetches viewer.js at open time from this repo
-```
-
-`viewer.js` is fetched fresh each time a chat is opened, so improvements to the viewer are picked up automatically without regenerating the HTML or re-running the script.
+Multi-line messages, emoji in names, RTL text, and WhatsApp markdown are all handled.
 
 ---
 
 ## Privacy
 
-- `index.html` — your zip file never leaves the browser tab; all parsing is done in JavaScript locally
-- Python mode — the script reads and writes only local files
-- `viewer.js` is the only network request made at open time (fetched from GitHub)
-- No analytics, no telemetry, no tracking of any kind
+Your chat data never leaves your computer. The script reads the zip, writes local files, and generates a local HTML file. There are no analytics, no telemetry, and no network requests of any kind.
 
 ---
 
