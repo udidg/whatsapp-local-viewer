@@ -28,21 +28,8 @@
   #landing p  { font-size: 14px; color: #666; max-width: 340px; line-height: 1.6; }
   body.dark #landing p { color: #8696a0; }
 
-  /* ── Drop zone ── */
-  #drop-zone {
-    width: 100%; max-width: 380px;
-    border: 2px dashed #25D366; border-radius: 16px;
-    padding: 36px 24px; cursor: pointer;
-    transition: background .2s, border-color .2s;
-    display: flex; flex-direction: column; align-items: center; gap: 12px;
-  }
-  #drop-zone:hover, #drop-zone.dragover {
-    background: rgba(37,211,102,.08); border-color: #128C7E;
-  }
-  #drop-zone .dz-icon { font-size: 40px; }
-  #drop-zone .dz-text { font-size: 15px; font-weight: 600; color: #128C7E; }
-  #drop-zone .dz-sub  { font-size: 13px; color: #888; }
-  #file-input { display: none; }
+  #landing-status { font-size: 14px; color: #666; }
+  body.dark #landing-status { color: #8696a0; }
 
 
 
@@ -105,15 +92,7 @@
 <div id="landing">
   <div class="logo">💬</div>
   <h1>WhatsApp Viewer</h1>
-  <p>Drop your WhatsApp export <code>.zip</code> here, or click to browse.<br>
-     Everything runs locally — no data leaves your device.</p>
-
-  <div id="drop-zone" role="button" tabindex="0" aria-label="Select zip file">
-    <span class="dz-icon">📦</span>
-    <span class="dz-text">Drop ZIP here or tap to browse</span>
-    <span class="dz-sub">WhatsApp Chat export including media</span>
-  </div>
-  <input type="file" id="file-input" accept=".zip">
+  <p id="landing-status">Looking for chat export…</p>
 
   <div id="error-box">
     <strong>Error</strong><br>
@@ -160,16 +139,15 @@ window.__libsReady = (async function () {
   'use strict';
 
   /* ── UI refs ── */
-  const landing       = document.getElementById('landing');
-  const progressScreen= document.getElementById('progress-screen');
-  const dropZone      = document.getElementById('drop-zone');
-  const fileInput     = document.getElementById('file-input');
-  const progBar       = document.getElementById('prog-bar');
-  const progStatus    = document.getElementById('prog-status');
-  const progTitle     = document.getElementById('prog-title');
-  const errorBox      = document.getElementById('error-box');
-  const errorMsg      = document.getElementById('error-msg');
-  const retryBtn      = document.getElementById('retry-btn');
+  const landing        = document.getElementById('landing');
+  const landingStatus  = document.getElementById('landing-status');
+  const progressScreen = document.getElementById('progress-screen');
+  const progBar        = document.getElementById('prog-bar');
+  const progStatus     = document.getElementById('prog-status');
+  const progTitle      = document.getElementById('prog-title');
+  const errorBox       = document.getElementById('error-box');
+  const errorMsg       = document.getElementById('error-msg');
+  const retryBtn       = document.getElementById('retry-btn');
 
   const steps = {
     read:   document.getElementById('step-read'),
@@ -178,7 +156,7 @@ window.__libsReady = (async function () {
     render: document.getElementById('step-render'),
   };
 
-  /* ── Dark mode (matches viewer) ── */
+  /* ── Dark mode ── */
   (function() {
     let saved; try { saved = localStorage.getItem('wa-dark'); } catch(_) {}
     const dark = saved !== null ? saved === '1'
@@ -191,10 +169,8 @@ window.__libsReady = (async function () {
     Object.entries(steps).forEach(([k, el]) => {
       el.classList.remove('active', 'done');
       const keys = Object.keys(steps);
-      const cur = keys.indexOf(key);
-      const me  = keys.indexOf(k);
-      if (me < cur)  el.classList.add('done');
-      if (me === cur) el.classList.add('active');
+      if (keys.indexOf(k) < keys.indexOf(key)) el.classList.add('done');
+      if (k === key) el.classList.add('active');
     });
   }
   function setProgress(pct, status) {
@@ -208,28 +184,95 @@ window.__libsReady = (async function () {
     errorMsg.textContent = msg;
   }
 
-  /* ── Drop zone ── */
-  dropZone.addEventListener('click', () => fileInput.click());
-  dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
-
-  dropZone.addEventListener('dragover', e => {
-    e.preventDefault(); dropZone.classList.add('dragover');
-  });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault(); dropZone.classList.remove('dragover');
-    const f = e.dataTransfer.files[0];
-    if (f) processFile(f);
-  });
-
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) processFile(fileInput.files[0]);
-  });
-
   retryBtn.addEventListener('click', () => {
     errorBox.classList.remove('visible');
-    fileInput.value = '';
+    landingStatus.textContent = 'Looking for chat export…';
+    autoLoad();
   });
+
+  /* ════════════════════════════════════════════════════════════════════════
+     AUTO-LOAD: discover the zip from the server directory listing
+     Strategy:
+       1. fetch('./') — works on nginx/Apache with autoindex on, returns HTML
+          with <a href="*.zip"> links we can parse out
+       2. If directory listing is disabled (403/no links found), fall back to
+          trying common filenames: chat.zip, export.zip, whatsapp.zip
+     ════════════════════════════════════════════════════════════════════════ */
+  async function findZipUrl() {
+    /* Try to parse directory listing */
+    try {
+      const r = await fetch('./');
+      if (r.ok) {
+        const html = await r.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const links = Array.from(doc.querySelectorAll('a[href]'));
+        const zipLinks = links
+          .map(a => a.getAttribute('href'))
+          .filter(h => h && h.toLowerCase().endsWith('.zip') && !h.startsWith('http'));
+        if (zipLinks.length > 0) {
+          /* Pick the largest one if multiple — most likely the full export */
+          if (zipLinks.length === 1) return zipLinks[0];
+          /* HEAD each to get Content-Length, pick largest */
+          const sizes = await Promise.all(zipLinks.map(async url => {
+            try {
+              const h = await fetch(url, { method: 'HEAD' });
+              const len = parseInt(h.headers.get('content-length') || '0', 10);
+              return { url, size: len };
+            } catch { return { url, size: 0 }; }
+          }));
+          sizes.sort((a, b) => b.size - a.size);
+          return sizes[0].url;
+        }
+      }
+    } catch (_) {}
+
+    /* Fallback: try common names */
+    const candidates = ['chat.zip', 'export.zip', 'whatsapp.zip'];
+    for (const name of candidates) {
+      try {
+        const r = await fetch(name, { method: 'HEAD' });
+        if (r.ok) return name;
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  async function autoLoad() {
+    landingStatus.textContent = 'Looking for ZIP file…';
+
+    /* Wait for libs */
+    try { await window.__libsReady; } catch(e) {
+      showError('Could not load required scripts: ' + e.message +
+        '. Check your internet connection and refresh.');
+      return;
+    }
+    if (typeof JSZip === 'undefined' || typeof WA === 'undefined') {
+      showError('Required scripts failed to load. Check your internet connection and refresh.');
+      return;
+    }
+
+    const zipUrl = await findZipUrl();
+    if (!zipUrl) {
+      showError('No .zip file found in this folder. ' +
+        'Make sure your WhatsApp export .zip is in the same directory as index.html on the server.');
+      return;
+    }
+
+    landingStatus.textContent = 'Found ' + zipUrl + ', loading…';
+
+    /* Fetch the zip as a blob then process it */
+    try {
+      const r = await fetch(zipUrl);
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' fetching ' + zipUrl);
+      const blob = await r.blob();
+      const file = new File([blob], zipUrl);
+      processFile(file, zipUrl);
+    } catch(e) {
+      showError('Failed to fetch ' + zipUrl + ': ' + e.message);
+    }
+  }
 
   /* ════════════════════════════════════════════════════════════════════════
      CHAT TEXT PARSER  (mirrors Python logic, runs in browser)
@@ -399,27 +442,6 @@ window.__libsReady = (async function () {
      MAIN: processFile
      ════════════════════════════════════════════════════════════════════════ */
   async function processFile(file) {
-    if (!file.name.toLowerCase().endsWith('.zip')) {
-      showError('Please select a WhatsApp export .zip file.'); return;
-    }
-
-    /* Wait for JSZip + viewer.js to finish loading */
-    try {
-      await window.__libsReady;
-    } catch (e) {
-      showError('Could not load required scripts: ' + e.message +
-        '. Check your internet connection and refresh.');
-      return;
-    }
-    if (typeof JSZip === 'undefined') {
-      showError('JSZip failed to load. Check your internet connection and refresh.');
-      return;
-    }
-    if (typeof WA === 'undefined' || typeof WA.init !== 'function') {
-      showError('viewer.js failed to load. Check your internet connection and refresh.');
-      return;
-    }
-
     /* Switch to progress screen */
     landing.style.display = 'none';
     progressScreen.classList.add('visible');
@@ -429,7 +451,10 @@ window.__libsReady = (async function () {
       /* ── Step 1: Read ZIP ── */
       setStep('read');
       setProgress(5, 'Reading ZIP file…');
-      progTitle.textContent = file.name.replace(/\.zip$/i,'');
+      let displayName = file.name.replace(/\.zip$/i, '');
+      if (/^whatsapp chat - /i.test(displayName))   displayName = displayName.slice('whatsapp chat - '.length);
+      if (/^whatsapp chat with /i.test(displayName)) displayName = displayName.slice('whatsapp chat with '.length);
+      progTitle.textContent = displayName;
 
       const zip = await JSZip.loadAsync(file, {
         createFolders: false,
@@ -523,9 +548,7 @@ window.__libsReady = (async function () {
       await new Promise(r => setTimeout(r, 0));
 
       /* Derive chat name from zip filename */
-      let chatName = file.name.replace(/\.zip$/i,'');
-      if (/^whatsapp chat - /i.test(chatName))   chatName = chatName.slice('whatsapp chat - '.length);
-      if (/^whatsapp chat with /i.test(chatName)) chatName = chatName.slice('whatsapp chat with '.length);
+      const chatName = displayName;
 
       /* Hide progress, hand off to viewer */
       progressScreen.classList.remove('visible');
@@ -554,6 +577,9 @@ window.__libsReady = (async function () {
       showError(err.message || String(err));
     }
   }
+
+  /* ── Start ── */
+  autoLoad();
 
 })();
 </script>
